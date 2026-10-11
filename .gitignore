@@ -1,0 +1,10 @@
+# Laufzeit-Artefakte vuln-web — werden von app.py beim Start automatisch
+# angelegt und geseedet (siehe vuln-web/README.md). Gehoeren nicht ins Repo.
+vuln-web/vuln-web.db
+vuln-web/vuln-web.db-*
+
+# Eigenstaendiges Repo, liegt nur im selben Arbeitsbaum (nicht ins zentral-Repo ziehen).
+ctf-ops/
+
+# Tooling-Caches
+.pytest_cache/
