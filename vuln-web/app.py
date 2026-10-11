@@ -17,8 +17,10 @@ Stop:    Strg+C
 
 from __future__ import annotations
 
+import base64
 import html
 import http.cookies
+import json
 import os
 import sqlite3
 import sys
@@ -38,6 +40,13 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vuln-web.db"
 FLAG_SQLI = "FLAG{sqli-login-bypass-7Qk2pL}"
 FLAG_BAC = "FLAG{broken-access-admin-9Lm5xR}"
 FLAG_XSS = "FLAG{reflected-xss-3Zt8wN}"
+
+# Nur fuer den Extraktions-Testlauf: EIN zusaetzlicher Flag, der absichtlich an
+# "versteckten" Stellen ausgeliefert wird (Header, Cookie, base64, nested JSON).
+# Er liegt in einer EIGENEN secrets-Zeile ('variant') — also in einer anderen
+# "Spalte"/Quelle als die drei bekannten Flags. Die drei klassischen Luecken und
+# ihre Ausnutzungspfade bleiben davon voellig unberuehrt (Happy Path = gruen).
+FLAG_VARIANT = "FLAG{hidden-variant-Qw9zY4}"
 
 
 # --------------------------------------------------------------------------
@@ -94,6 +103,12 @@ def init_db() -> None:
                     ("xss", FLAG_XSS),
                 ],
             )
+        # Varianten-Flag idempotent sicherstellen (auch in bereits bestehenden
+        # DB-Dateien): eigene secrets-Zeile, stoert die drei bekannten nicht.
+        cur.execute(
+            "INSERT OR IGNORE INTO secrets (key, value) VALUES ('variant', ?)",
+            (FLAG_VARIANT,),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -131,6 +146,7 @@ NAV = """
   <li><a href="/hello?name=Welt">Begruessung</a></li>
   <li><a href="/login">Login</a></li>
   <li><a href="/admin">Admin</a></li>
+  <li><a href="/variant">Flag-Varianten (Test)</a></li>
 </ul>
 <hr>
 """
@@ -150,6 +166,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def send_raw(self, payload: bytes, *, status: int = 200,
+                 content_type: str = "text/html; charset=utf-8",
+                 extra_headers: list[tuple[str, str]] | None = None) -> None:
+        """Rohantwort mit frei waehlbarem Content-Type und Zusatz-Headern (fuer die
+        Flag-Varianten: Flag im Header/Cookie bzw. JSON-Body)."""
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        for key, value in (extra_headers or []):
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -178,6 +207,8 @@ class Handler(BaseHTTPRequestHandler):
             self.route_login_form()
         elif route.path == "/admin":
             self.route_admin()
+        elif route.path == "/variant":
+            self.route_variant(params)
         else:
             self.send_html("<p>Nicht gefunden.</p>", status=404)
 
@@ -323,6 +354,84 @@ class Handler(BaseHTTPRequestHandler):
             f"<p>Access-Control-Flag: <code>{html.escape(flag)}</code></p>"
         )
         self.send_html(body)
+
+    def route_variant(self, params: dict[str, str]) -> None:
+        """NUR fuer den Extraktions-Testlauf: liefert FLAG_VARIANT an bewusst
+        "versteckten" Stellen aus (Header, Cookie, base64, nested JSON), steuerbar
+        ueber ``?kind=``. Der Flag kommt aus einer EIGENEN secrets-Zeile
+        ('variant') — die drei klassischen Luecken und ihre Pfade bleiben
+        unberuehrt. Fuer header/cookie/base64 taucht der KLARTEXT-Flag bewusst NICHT
+        im Body auf, damit der Testlauf wirklich die versteckte Stelle prueft."""
+        conn = db()
+        try:
+            flag = conn.execute(
+                "SELECT value FROM secrets WHERE key = 'variant'"
+            ).fetchone()["value"]
+        finally:
+            conn.close()
+
+        kind = params.get("kind", "")
+
+        if kind == "header":
+            body = page(NAV +
+                        "<h2>Variante: Header</h2>"
+                        "<p>Der Flag steckt NICHT im Body, sondern im Response-Header "
+                        "<code>X-CTF-Flag</code>.</p>")
+            self.send_raw(body, extra_headers=[("X-CTF-Flag", flag)])
+            return
+
+        if kind == "cookie":
+            body = page(NAV +
+                        "<h2>Variante: Cookie</h2>"
+                        "<p>Der Flag steckt in einem <code>Set-Cookie</code>-Header.</p>")
+            self.send_raw(body, extra_headers=[("Set-Cookie", f"ctf_flag={flag}; Path=/")])
+            return
+
+        if kind == "base64":
+            enc = base64.b64encode(flag.encode()).decode()
+            body = page(NAV +
+                        "<h2>Variante: base64</h2>"
+                        "<p>Der Flag ist base64-kodiert und steht als Kommentar im "
+                        f"Quelltext.</p><!-- {enc} -->")
+            self.send_raw(body)
+            return
+
+        if kind == "json":
+            payload = {
+                "ok": True,
+                "data": {
+                    "items": [{"id": 1, "name": "Kaffee"}, {"id": 2, "name": "Tee"}],
+                    "meta": {"issued_by": "vuln-web", "token": flag},
+                },
+            }
+            self.send_raw(json.dumps(payload).encode("utf-8"),
+                          content_type="application/json; charset=utf-8")
+            return
+
+        if kind == "b64json":
+            enc = base64.b64encode(flag.encode()).decode()
+            payload = {"ok": True, "data": {"blob": enc, "encoding": "base64"}}
+            self.send_raw(json.dumps(payload).encode("utf-8"),
+                          content_type="application/json; charset=utf-8")
+            return
+
+        # Index (ohne Flag im Body): verfuegbare Varianten auflisten.
+        rows = [
+            ("header", "Flag im Response-Header X-CTF-Flag"),
+            ("cookie", "Flag im Set-Cookie-Header"),
+            ("base64", "Flag base64-kodiert im Body-Kommentar"),
+            ("json", "Flag als Klartext nested im JSON"),
+            ("b64json", "Flag base64-kodiert nested im JSON"),
+        ]
+        links = "".join(
+            f'<li><a href="/variant?kind={k}">{k}</a> &ndash; {desc}</li>'
+            for k, desc in rows
+        )
+        self.send_html(
+            "<h2>Flag-Varianten (nur Test)</h2>"
+            "<p>Derselbe Flag an bewusst versteckten Stellen &ndash; zum Pruefen der "
+            f"zentralen Extraktion.</p><ul>{links}</ul>"
+        )
 
 
 # --------------------------------------------------------------------------

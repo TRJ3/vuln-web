@@ -76,6 +76,26 @@ curl -s "http://127.0.0.1:8000/hello?name=<script>alert(1)</script>"
 Die Flag erscheint im Quelltext der Antwort. Harmlose Eingaben (ohne `<`)
 geben keine Flag zurück.
 
+## Flag-Varianten (nur Test) → `/variant`
+
+Zum Prüfen der **zentralen Flag-Extraktion** liefert `/variant` denselben
+Zusatz-Flag `FLAG{hidden-variant-Qw9zY4}` an bewusst *versteckten* Stellen aus.
+Der Flag liegt in einer eigenen `secrets`-Zeile (`variant`) – also einer anderen
+Quelle/„Spalte" als die drei bekannten. Die drei klassischen Lücken und ihre
+Pfade bleiben davon unberührt (Happy Path bleibt grün).
+
+| Aufruf | Wo steckt der Flag |
+|--------|--------------------|
+| `/variant?kind=header`  | Response-Header `X-CTF-Flag` (nicht im Body) |
+| `/variant?kind=cookie`  | `Set-Cookie`-Header (nicht im Body) |
+| `/variant?kind=base64`  | base64-kodiert im Body-Kommentar |
+| `/variant?kind=json`    | Klartext nested im JSON (`data.meta.token`) |
+| `/variant?kind=b64json` | base64-kodiert nested im JSON (`data.blob`) |
+
+Eine reine Body-Klartext-Suche findet header/cookie/base64 **nicht**; eine
+Extraktion über Body **+ Header + Dekodierung** zieht alle fünf. `verify.py`
+prüft sie zusätzlich zum Happy Path.
+
 ## Für den Code-Audit
 
 Der Quelltext steht komplett in [app.py](app.py) und ist bewusst gut lesbar
