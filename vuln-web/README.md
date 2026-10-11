@@ -5,6 +5,10 @@ Reines Python 3.13 stdlib (`http.server`), eine SQLite-Datei, startbar mit einem
 
 > ⚠️ Nur lokal betreiben. Der Server bindet bewusst nur an `127.0.0.1`.
 > Nicht ins Netz stellen, nicht als Vorlage für echten Code nehmen.
+>
+> ℹ️ Rolle im ctf-ops-Setup: Dies ist die **eigene** App (`own_instance`), die wir
+> *verteidigen* und als **Verify-/Preflight-Sandbox** für PoCs nutzen — **nicht** das
+> Angriffsziel. Angegriffen werden nur die Gegner-Instanzen aus `config/targets.toml`.
 
 ## Starten
 
